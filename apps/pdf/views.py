@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 from django.http import FileResponse, Http404
@@ -28,6 +29,8 @@ from .services import (
     store_uploaded_files,
 )
 from .tasks import process_pdf_job
+
+logger = logging.getLogger(__name__)
 
 
 def get_job_or_404(job_id: str) -> PDFJob:
@@ -62,6 +65,7 @@ class PDFToolBaseAPIView(APIView):
             input_count=len(files),
             expires_at=timezone.now(),
         )
+        logger.info("Job %s (%s) created with %s input file(s)", job.id, self.tool_name, len(files))
         try:
             input_paths = store_uploaded_files(job, files)
             job.input_paths = input_paths
@@ -71,6 +75,7 @@ class PDFToolBaseAPIView(APIView):
             job.refresh_from_db()
             return job
         except Exception:
+            logger.exception("Job %s (%s) setup failed, rolling back", job.id, self.tool_name)
             delete_job_storage(job)
             job.delete()
             raise
@@ -181,6 +186,7 @@ class PDFJobDetailAPIView(APIView):
         if job.is_expired:
             job.mark_expired()
             delete_job_storage(job)
+        logger.debug("Job %s status lookup: %s", job.id, job.status)
         serializer = PDFJobSerializer(job, context={"request": request})
         return success_response(serializer.data)
 
@@ -200,6 +206,7 @@ class PDFJobDownloadAPIView(APIView):
         if job.is_expired:
             job.mark_expired()
             delete_job_storage(job)
+            logger.info("Download rejected for job %s: expired", job.id)
             return error_response(
                 "This job has expired and the files have been deleted. "
                 "Please upload your files again to start a new job.",
@@ -207,6 +214,7 @@ class PDFJobDownloadAPIView(APIView):
                 http_status=status.HTTP_404_NOT_FOUND,
             )
         if job.status != PDFJob.Status.COMPLETED or not job.output_file or not job.output_file.exists():
+            logger.info("Download rejected for job %s: not ready (status=%s)", job.id, job.status)
             return error_response(
                 "Your PDF is still being processed. "
                 "Please check again in a few moments.",
@@ -215,5 +223,6 @@ class PDFJobDownloadAPIView(APIView):
             )
         job.download_count = job.download_count + 1
         job.save(update_fields=["download_count", "updated_at"])
+        logger.info("Job %s downloaded (count=%s)", job.id, job.download_count)
         content_type = "application/zip" if job.result_filename.endswith(".zip") else "application/pdf"
         return FileResponse(open(job.output_file, "rb"), as_attachment=True, filename=job.result_filename, content_type=content_type)

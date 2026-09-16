@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import shutil
 import zipfile
@@ -15,6 +16,8 @@ from django.utils import timezone
 from pypdf import PdfReader, PdfWriter
 
 from .models import PDFJob
+
+logger = logging.getLogger(__name__)
 
 PAGE_RANGE_RE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$")
 
@@ -33,20 +36,24 @@ class SplitChunk:
 
 def validate_uploaded_pdf(uploaded_file: UploadedFile) -> None:
     filename = uploaded_file.name or "unknown"
+    logger.debug("Validating uploaded file '%s' (%s bytes)", filename, uploaded_file.size)
 
     if uploaded_file.size <= 0:
+        logger.warning("Rejected upload '%s': empty file", filename)
         raise ValidationError(
             f"The file '{filename}' is empty. Please upload a valid PDF."
         )
 
     if uploaded_file.size > settings.PDF_MAX_INPUT_BYTES:
         max_mb = settings.PDF_MAX_INPUT_BYTES // (1024 * 1024)
+        logger.warning("Rejected upload '%s': exceeds %sMB limit", filename, max_mb)
         raise ValidationError(
             f"File '{filename}' exceeds the maximum size of {max_mb}MB. "
             f"Please upload a smaller file."
         )
 
     if not filename.lower().endswith(".pdf"):
+        logger.warning("Rejected upload '%s': not a .pdf file", filename)
         raise ValidationError(
             f"Only PDF files are accepted. You uploaded '{filename}'. "
             f"Please upload a PDF file."
@@ -55,11 +62,13 @@ def validate_uploaded_pdf(uploaded_file: UploadedFile) -> None:
     try:
         reader = PdfReader(uploaded_file, strict=False)
         if reader.is_encrypted and reader.decrypt("") == 0:
+            logger.warning("Rejected upload '%s': password protected", filename)
             raise ValidationError(
                 "Password-protected PDFs are not supported. "
                 "Please upload a PDF without password protection."
             )
         if len(reader.pages) == 0:
+            logger.warning("Rejected upload '%s': zero pages", filename)
             raise ValidationError(
                 f"The PDF file '{filename}' has no pages. "
                 f"Please upload a valid PDF."
@@ -68,6 +77,7 @@ def validate_uploaded_pdf(uploaded_file: UploadedFile) -> None:
     except ValidationError:
         raise
     except Exception:
+        logger.exception("Rejected upload '%s': failed to parse as PDF", filename)
         raise ValidationError(
             f"The file '{filename}' is not a valid PDF. It may be corrupted. "
             f"Please try uploading again."
@@ -160,6 +170,7 @@ def store_uploaded_files(job: PDFJob, uploaded_files: list[UploadedFile]) -> lis
             for chunk in uploaded_file.chunks():
                 handle.write(chunk)
         relative_paths.append(job.storage_relative_path(absolute_path))
+    logger.info("Job %s: stored %s input file(s)", job.id, len(relative_paths))
     return relative_paths
 
 
@@ -188,6 +199,7 @@ def get_reader(path: Path) -> PdfReader:
     except ValidationError:
         raise
     except Exception as exc:
+        logger.exception("Failed to read PDF '%s'", path)
         raise ValidationError(
             f"Could not read '{path.name}'. The file may be corrupted. "
             f"Please try again."
@@ -205,6 +217,7 @@ def merge_pdfs(input_paths: list[Path], output_path: Path) -> int:
     writer.add_metadata({"/Producer": "Toolvaya"})
     with open(output_path, "wb") as handle:
         writer.write(handle)
+    logger.debug("Merged %s file(s) into %s (%s pages)", len(input_paths), output_path, total_pages)
     return total_pages
 
 
@@ -218,6 +231,7 @@ def compress_pdf(input_path: Path, output_path: Path) -> int:
         writer.add_metadata({key: str(value) for key, value in reader.metadata.items() if value is not None})
     with open(output_path, "wb") as handle:
         writer.write(handle)
+    logger.debug("Compressed %s (%s pages) -> %s", input_path, len(reader.pages), output_path)
     return len(reader.pages)
 
 
@@ -234,6 +248,7 @@ def reorder_pdf(input_path: Path, output_path: Path, page_order: list[int]) -> i
         writer.add_metadata({key: str(value) for key, value in reader.metadata.items() if value is not None})
     with open(output_path, "wb") as handle:
         writer.write(handle)
+    logger.debug("Reordered %s -> %s (%s pages)", input_path, output_path, len(page_order))
     return len(page_order)
 
 
@@ -247,6 +262,7 @@ def remove_pages(input_path: Path, output_path: Path, pages_to_remove: set[int])
         writer.add_page(page)
         kept += 1
     if kept == 0:
+        logger.warning("Remove-pages on %s would leave an empty PDF", input_path)
         raise ValidationError(
             "Removing these pages would leave an empty PDF. "
             "Please keep at least one page."
@@ -255,6 +271,7 @@ def remove_pages(input_path: Path, output_path: Path, pages_to_remove: set[int])
         writer.add_metadata({key: str(value) for key, value in reader.metadata.items() if value is not None})
     with open(output_path, "wb") as handle:
         writer.write(handle)
+    logger.debug("Removed %s page(s) from %s -> %s (%s kept)", len(pages_to_remove), input_path, output_path, kept)
     return kept
 
 
@@ -272,6 +289,7 @@ def split_pdf(input_path: Path, output_zip_path: Path, chunks: list[SplitChunk])
             writer.write(buffer)
             filename = f"split-{index:03d}-{chunk.start}-{chunk.end}.pdf"
             archive.writestr(filename, buffer.getvalue())
+    logger.debug("Split %s into %s chunk(s) -> %s (%s pages)", input_path, len(chunks), output_zip_path, total_pages)
     return total_pages
 
 
@@ -293,3 +311,4 @@ def prepare_job_expiry(job: PDFJob) -> None:
 
 def delete_job_storage(job: PDFJob) -> None:
     shutil.rmtree(job.root_dir, ignore_errors=True)
+    logger.debug("Job %s: deleted storage at %s", job.id, job.root_dir)

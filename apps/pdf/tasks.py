@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
@@ -19,6 +21,8 @@ from .services import (
     split_pdf,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _load_job(job_id) -> PDFJob:
     return PDFJob.objects.get(pk=job_id)
@@ -26,8 +30,10 @@ def _load_job(job_id) -> PDFJob:
 
 @shared_task(bind=True, ignore_result=True)
 def process_pdf_job(self, job_id: str) -> None:
+    logger.info("Task process_pdf_job received for job %s", job_id)
     job = _load_job(job_id)
     if job.status not in {PDFJob.Status.PENDING, PDFJob.Status.PROCESSING}:
+        logger.warning("Job %s already in status %s, skipping", job.id, job.status)
         return
 
     try:
@@ -83,12 +89,16 @@ def process_pdf_job(self, job_id: str) -> None:
         else:
             raise ValueError(f"Unsupported PDF tool '{job.tool}'.")
     except Exception as exc:  # pragma: no cover - task safety
+        logger.exception("Job %s (%s) processing failed", job.id, job.tool)
         job.mark_failed(str(exc))
         raise
+    else:
+        logger.info("Task process_pdf_job finished for job %s", job_id)
 
 
 @shared_task(bind=True, ignore_result=True)
 def cleanup_expired_pdf_jobs(self) -> int:
+    logger.info("Task cleanup_expired_pdf_jobs started")
     now = timezone.now()
     expired_jobs = PDFJob.objects.filter(expires_at__lte=now).exclude(status=PDFJob.Status.EXPIRED)[: settings.PDF_CLEANUP_BATCH_SIZE]
     expired_ids: list[str] = []
@@ -96,4 +106,5 @@ def cleanup_expired_pdf_jobs(self) -> int:
         job.mark_expired()
         job.clear_storage()
         expired_ids.append(str(job.id))
+    logger.info("Task cleanup_expired_pdf_jobs finished: %s job(s) expired", len(expired_ids))
     return len(expired_ids)

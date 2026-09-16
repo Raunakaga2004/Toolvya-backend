@@ -7,3 +7,5 @@ media/
 venv/
 *.egg-info/
 .DS_Store
+.mcp.json
+logs/

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.views import exception_handler
+
+logger = logging.getLogger(__name__)
 
 
 def core_exception_handler(exc, context):
@@ -25,6 +29,22 @@ def core_exception_handler(exc, context):
             body["error"]["details"] = details
 
         response.data = body
+
+        request = context.get("request")
+        view = context.get("view")
+        log_level = logging.ERROR if response.status_code >= 500 else logging.WARNING
+        logger.log(
+            log_level,
+            "API error %s [%s] on %s %s in %s: %s",
+            response.status_code,
+            code,
+            getattr(request, "method", "-"),
+            getattr(request, "path", "-"),
+            type(view).__name__ if view else "-",
+            message,
+        )
+    else:
+        logger.exception("Unhandled exception in %s", type(context.get("view")).__name__ if context.get("view") else "-")
     return response
 
 
