@@ -77,8 +77,13 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
+database_url = os.getenv("DATABASE_URL")
 database_engine = os.getenv("DATABASE_ENGINE", "django.db.backends.sqlite3")
-if database_engine == "django.db.backends.postgresql":
+if database_url:
+    import dj_database_url
+
+    DATABASES = {"default": dj_database_url.parse(database_url)}
+elif database_engine == "django.db.backends.postgresql":
     DATABASES = {
         "default": {
             "ENGINE": database_engine,
