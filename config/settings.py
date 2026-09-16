@@ -23,7 +23,7 @@ def get_list(name: str, default: str = "") -> list[str]:
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-change-me")
 DEBUG = get_bool("DJANGO_DEBUG", True)
-ALLOWED_HOSTS = get_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+ALLOWED_HOSTS = get_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,api.toolvya.com")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
