@@ -144,6 +144,9 @@ PDF_JOB_TTL_HOURS = int(os.getenv("PDF_JOB_TTL_HOURS", "24"))
 PDF_CLEANUP_BATCH_SIZE = int(os.getenv("PDF_CLEANUP_BATCH_SIZE", "100"))
 
 CORS_ALLOWED_ORIGINS = get_list("CORS_ALLOWED_ORIGINS", "https://toolvya.com")
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://toolvya-frontend-[\w-]+-raunakaga2004s-projects\.vercel\.app$",
+]
 CORS_ALLOW_CREDENTIALS = True
 
 REST_FRAMEWORK = {
